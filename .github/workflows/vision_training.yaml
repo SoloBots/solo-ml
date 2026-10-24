@@ -1,0 +1,62 @@
+name: HPC Training Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      train_config:
+        description: "Select the configuration file for the training pipeline"
+        required: true
+        default: "ball_only"
+        type: choice
+        options:
+          - "ball_only"
+          - "full_vision"
+
+env:
+  HPC_USER: "schlotts"
+  HPC_HOST: "slurm-login.hpc-service.hu-berlin.de"
+
+jobs:
+  run_ball_only:
+    runs-on: ubuntu-latest
+    # Equivalent to the GitLab rules check for the input option
+    if: github.event.inputs.train_config == 'ball_only'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up SSH Key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.HPC_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan ${{ env.HPC_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy and Submit Slurm Job
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-8)
+          REMOTE_DIR="/lustre/informatik/schlotts/pipeline_runs/${{ github.actor }}-$SHORT_SHA-${{ github.run_id }}"
+          
+          echo "Deploying to remote directory: $REMOTE_DIR"
+
+          # 1. Create the unique directory on HPC
+          ssh ${{ env.HPC_USER }}@${{ env.HPC_HOST }} "mkdir -p $REMOTE_DIR"
+
+          # 2. Copy code (excluding heavy/unnecessary files)
+          rsync -avz --exclude='.git' --exclude='outputs' ./ ${{ env.HPC_USER }}@${{ env.HPC_HOST }}:$REMOTE_DIR/
+
+          # 3. Submit the job to Slurm
+          ssh ${{ env.HPC_USER }}@${{ env.HPC_HOST }} "cd $REMOTE_DIR && sbatch <<'EOF'
+          #!/bin/bash
+          #SBATCH --job-name=RL_$SHORT_SHA
+          #SBATCH --output=ball_training.log
+          #SBATCH --partition=robocup 
+          #SBATCH --gres=gpu:1
+          #SBATCH --cpus-per-task=8
+          #SBATCH --mem=32G
+
+          source /lustre/informatik/schlotts/ball_booster/.venv/bin/activate
+
+          python ball-detection/booster_train_ball.py
+          EOF"
