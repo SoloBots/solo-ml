@@ -18,7 +18,7 @@ env:
 
 jobs:
   train_ball_only_model:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Equivalent to the GitLab rules check for the input option
     if: github.event.inputs.train_config == 'ball_only'
 
